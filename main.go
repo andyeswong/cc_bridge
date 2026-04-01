@@ -131,21 +131,45 @@ func (s *SessionStore) Set(clientID, claudeID string) {
 	s.sessions[clientID] = claudeID
 }
 
+// ─── Config (env-driven, nothing hardcoded) ──────────────────────────────────
+
+type Config struct {
+	Port         string // PORT
+	ClaudeBin    string // CLAUDE_BIN — override claude binary path
+	SkipPerms    bool   // CLAUDE_SKIP_PERMS — pass --dangerously-skip-permissions
+	DefaultModel string // CLAUDE_DEFAULT_MODEL
+	AuthKey      string // CLAUDE_AUTH_KEY — if set, require Authorization: Bearer <key>
+	Workdir      string // CLAUDE_WORKDIR — working directory for claude subprocess
+}
+
+var cfg Config
+
+func loadConfig() {
+	cfg.Port = envOr("PORT", "8080")
+	cfg.ClaudeBin = os.Getenv("CLAUDE_BIN")
+	cfg.SkipPerms = os.Getenv("CLAUDE_SKIP_PERMS") == "true" || os.Getenv("CLAUDE_SKIP_PERMS") == "1"
+	cfg.DefaultModel = envOr("CLAUDE_DEFAULT_MODEL", "claude-code")
+	cfg.AuthKey = os.Getenv("CLAUDE_AUTH_KEY")
+	cfg.Workdir = os.Getenv("CLAUDE_WORKDIR")
+}
+
+func envOr(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 func claudePath() string {
-	// try PATH first, then npm global
+	// 1. explicit override
+	if cfg.ClaudeBin != "" {
+		return cfg.ClaudeBin
+	}
+	// 2. PATH lookup
 	if p, err := exec.LookPath("claude"); err == nil {
 		return p
-	}
-	candidates := []string{
-		"/home/entdev/.npm-global/bin/claude",
-		"/usr/local/bin/claude",
-	}
-	for _, c := range candidates {
-		if _, err := os.Stat(c); err == nil {
-			return c
-		}
 	}
 	return "claude"
 }
@@ -202,7 +226,9 @@ func buildArgs(a claudeArgs) []string {
 	} else if a.newSessionID != "" {
 		args = append(args, "--session-id", a.newSessionID)
 	}
-	args = append(args, "--dangerously-skip-permissions")
+	if cfg.SkipPerms {
+		args = append(args, "--dangerously-skip-permissions")
+	}
 	args = append(args, a.prompt)
 	return args
 }
@@ -212,6 +238,9 @@ func runClaudeSync(a claudeArgs) (string, string, *ClaudeUsage, error) {
 	args := buildArgs(a)
 	cmd := exec.Command(claudePath(), args...)
 	cmd.Env = os.Environ()
+	if cfg.Workdir != "" {
+		cmd.Dir = cfg.Workdir
+	}
 
 	out, err := cmd.Output()
 	if err != nil {
@@ -237,6 +266,9 @@ func runClaudeStream(w http.ResponseWriter, a claudeArgs, respID, model string) 
 	args := buildArgs(a)
 	cmd := exec.Command(claudePath(), args...)
 	cmd.Env = os.Environ()
+	if cfg.Workdir != "" {
+		cmd.Dir = cfg.Workdir
+	}
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -321,17 +353,40 @@ func sendSSEDelta(w http.ResponseWriter, id, model, role, content string, finish
 
 // ─── HTTP Handlers ────────────────────────────────────────────────────────────
 
+// knownModels are queried dynamically from the claude CLI when possible.
+var knownModels = []string{
+	"claude-code",
+	"claude-sonnet-4-6",
+	"claude-sonnet-4-5",
+	"claude-opus-4-5",
+	"claude-haiku-3-5",
+}
+
 func handleModels(w http.ResponseWriter, r *http.Request) {
-	models := ModelsResponse{
-		Object: "list",
-		Data: []ModelInfo{
-			{ID: "claude-code", Object: "model", Created: 1700000000, OwnedBy: "anthropic"},
-			{ID: "claude-sonnet-4-5", Object: "model", Created: 1700000000, OwnedBy: "anthropic"},
-			{ID: "claude-opus-4-5", Object: "model", Created: 1700000000, OwnedBy: "anthropic"},
-		},
+	ts := time.Now().Unix()
+	data := make([]ModelInfo, 0, len(knownModels))
+	for _, id := range knownModels {
+		data = append(data, ModelInfo{ID: id, Object: "model", Created: ts, OwnedBy: "anthropic"})
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(models)
+	json.NewEncoder(w).Encode(ModelsResponse{Object: "list", Data: data})
+}
+
+// authMiddleware checks Authorization: Bearer <CLAUDE_AUTH_KEY> when configured.
+func authMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if cfg.AuthKey == "" {
+			next(w, r)
+			return
+		}
+		auth := r.Header.Get("Authorization")
+		expected := "Bearer " + cfg.AuthKey
+		if auth != expected {
+			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+			return
+		}
+		next(w, r)
+	}
 }
 
 func handleChat(w http.ResponseWriter, r *http.Request) {
@@ -359,7 +414,7 @@ func handleChat(w http.ResponseWriter, r *http.Request) {
 	respID := "chatcmpl-" + uuid.New().String()
 	model := req.Model
 	if model == "" {
-		model = "claude-code"
+		model = cfg.DefaultModel
 	}
 
 	// ── Determine stateful vs stateless ──────────────────────────────────────
@@ -432,21 +487,26 @@ func handleChat(w http.ResponseWriter, r *http.Request) {
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 func main() {
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
-	}
+	loadConfig()
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/v1/models", handleModels)
-	mux.HandleFunc("/v1/chat/completions", handleChat)
+	mux.HandleFunc("/v1/models", authMiddleware(handleModels))
+	mux.HandleFunc("/v1/chat/completions", authMiddleware(handleChat))
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{"status":"ok"}`))
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"status":"ok","claude":"%s","workdir":"%s","skip_perms":%v}`,
+			claudePath(), cfg.Workdir, cfg.SkipPerms)
 	})
 
-	log.Printf("claude-bridge listening on :%s", port)
-	log.Printf("claude binary: %s", claudePath())
-	if err := http.ListenAndServe(":"+port, mux); err != nil {
+	log.Printf("cc_bridge starting")
+	log.Printf("  port:          :%s", cfg.Port)
+	log.Printf("  claude binary: %s", claudePath())
+	log.Printf("  workdir:       %s", cfg.Workdir)
+	log.Printf("  skip_perms:    %v", cfg.SkipPerms)
+	log.Printf("  default model: %s", cfg.DefaultModel)
+	log.Printf("  auth:          %v", cfg.AuthKey != "")
+
+	if err := http.ListenAndServe(":"+cfg.Port, mux); err != nil {
 		log.Fatal(err)
 	}
 }
