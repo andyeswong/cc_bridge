@@ -170,7 +170,7 @@ func loadConfig() {
 	cfg.DefaultModel = envOr("CLAUDE_DEFAULT_MODEL", "claude-code")
 	cfg.AuthKey = os.Getenv("CLAUDE_AUTH_KEY")
 	cfg.Workdir = os.Getenv("CLAUDE_WORKDIR")
-	cfg.OllamaURL = envOr("OLLAMA_URL", "http://localhost:11434")
+	cfg.OllamaURL = envOr("OLLAMA_URL", "https://ollama.andres-wong.com")
 	cfg.UsageDBPath = envOr("USAGE_DB_PATH", "./usage.db")
 }
 
@@ -508,10 +508,15 @@ func sendSSEDelta(w http.ResponseWriter, id, model, role, content string, finish
 
 // ─── Ollama invocation ────────────────────────────────────────────────────────
 
+type ollamaOptions struct {
+	NumCtx int `json:"num_ctx"`
+}
+
 type ollamaReqBody struct {
-	Model    string    `json:"model"`
-	Messages []Message `json:"messages"`
-	Stream   bool      `json:"stream"`
+	Model    string        `json:"model"`
+	Messages []Message     `json:"messages"`
+	Stream   bool          `json:"stream"`
+	Options  ollamaOptions `json:"options"`
 }
 
 func ollamaEndpoint() string {
@@ -519,7 +524,7 @@ func ollamaEndpoint() string {
 }
 
 func runOllamaSync(model string, messages []Message) (string, *Usage, error) {
-	body, _ := json.Marshal(ollamaReqBody{Model: model, Messages: messages, Stream: false})
+	body, _ := json.Marshal(ollamaReqBody{Model: model, Messages: messages, Stream: false, Options: ollamaOptions{NumCtx: 48000}})
 	resp, err := http.Post(ollamaEndpoint(), "application/json", bytes.NewReader(body))
 	if err != nil {
 		return "", nil, fmt.Errorf("ollama request: %w", err)
@@ -543,7 +548,7 @@ func runOllamaSync(model string, messages []Message) (string, *Usage, error) {
 
 // runOllamaStream proxies SSE from Ollama to w, returns (assistantText, usage).
 func runOllamaStream(w http.ResponseWriter, model string, messages []Message, respID string) (string, *Usage) {
-	body, _ := json.Marshal(ollamaReqBody{Model: model, Messages: messages, Stream: true})
+	body, _ := json.Marshal(ollamaReqBody{Model: model, Messages: messages, Stream: true, Options: ollamaOptions{NumCtx: 48000}})
 	resp, err := http.Post(ollamaEndpoint(), "application/json", bytes.NewReader(body))
 	if err != nil {
 		log.Printf("ollama stream error: %v", err)
@@ -859,6 +864,7 @@ func main() {
 	log.Printf("  default model: %s", cfg.DefaultModel)
 	log.Printf("  auth:          %v", cfg.AuthKey != "")
 	log.Printf("  ollama url:    %s", cfg.OllamaURL)
+	log.Printf("  ollama num_ctx: 48000")
 	log.Printf("  usage db:      %s", cfg.UsageDBPath)
 
 	if err := http.ListenAndServe(":"+cfg.Port, mux); err != nil {
