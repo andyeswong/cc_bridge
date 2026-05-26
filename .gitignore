@@ -1,0 +1,4 @@
+# Windows build + runtime artifacts (the Linux `claude-bridge` binary stays tracked)
+*.exe
+usage.db
+bridge.log

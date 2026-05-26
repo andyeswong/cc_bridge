@@ -388,7 +388,10 @@ func buildArgs(a claudeArgs) []string {
 	if cfg.SkipPerms {
 		args = append(args, "--dangerously-skip-permissions")
 	}
-	args = append(args, a.prompt)
+	// The prompt is fed to `claude -p` via stdin (see runClaudeSync /
+	// runClaudeStream), NOT as an argv. Windows caps a process command line at
+	// ~32K chars and large architect prompts overflow it ("filename or
+	// extension is too long"). stdin works the same on Linux.
 	return args
 }
 
@@ -396,6 +399,7 @@ func runClaudeSync(a claudeArgs) (string, string, *ClaudeUsage, error) {
 	args := buildArgs(a)
 	cmd := exec.Command(claudePath(), args...)
 	cmd.Env = os.Environ()
+	cmd.Stdin = strings.NewReader(a.prompt)
 	if cfg.Workdir != "" {
 		cmd.Dir = cfg.Workdir
 	}
@@ -421,6 +425,7 @@ func runClaudeStream(w http.ResponseWriter, a claudeArgs, respID, model string) 
 	args := buildArgs(a)
 	cmd := exec.Command(claudePath(), args...)
 	cmd.Env = os.Environ()
+	cmd.Stdin = strings.NewReader(a.prompt)
 	if cfg.Workdir != "" {
 		cmd.Dir = cfg.Workdir
 	}
