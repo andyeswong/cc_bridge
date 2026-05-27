@@ -30,6 +30,12 @@ type ChatRequest struct {
 	Model    string    `json:"model"`
 	Messages []Message `json:"messages"`
 	Stream   bool      `json:"stream"`
+
+	// cc_bridge extensions (Claude backend only; vanilla OpenAI clients ignore them).
+	AllowedTools []string        `json:"allowed_tools,omitempty"` // allowlist; headless denies anything not listed. e.g. ["mcp__projecthub__task_update","mcp__MCPControl"]
+	MCPServers   []string        `json:"mcp_servers,omitempty"`   // subset of the server-level registry to enable for this request
+	MCPConfig    json.RawMessage `json:"mcp_config,omitempty"`    // inline {"mcpServers":{...}}; overrides the registry (self-contained caller)
+	Workdir      string          `json:"workdir,omitempty"`       // working dir for the claude subprocess (e.g. the task's repo)
 }
 
 type Choice struct {
@@ -151,14 +157,16 @@ func (s *OllamaSessionStore) Set(id string, msgs []Message) {
 // ─── Config ───────────────────────────────────────────────────────────────────
 
 type Config struct {
-	Port         string // PORT
-	ClaudeBin    string // CLAUDE_BIN
-	SkipPerms    bool   // CLAUDE_SKIP_PERMS
-	DefaultModel string // CLAUDE_DEFAULT_MODEL
-	AuthKey      string // CLAUDE_AUTH_KEY
-	Workdir      string // CLAUDE_WORKDIR
-	OllamaURL    string // OLLAMA_URL
-	UsageDBPath  string // USAGE_DB_PATH
+	Port          string // PORT
+	ClaudeBin     string // CLAUDE_BIN
+	SkipPerms     bool   // CLAUDE_SKIP_PERMS
+	DefaultModel  string // CLAUDE_DEFAULT_MODEL
+	AuthKey       string // CLAUDE_AUTH_KEY
+	Workdir       string // CLAUDE_WORKDIR
+	OllamaURL     string // OLLAMA_URL
+	UsageDBPath   string // USAGE_DB_PATH
+	MCPConfigPath string // MCP_CONFIG_PATH — server-level MCP registry (NOT committed; holds creds)
+	MCPAlways     bool   // MCP_ALWAYS — load the whole registry on every Claude request
 }
 
 var cfg Config
@@ -172,6 +180,8 @@ func loadConfig() {
 	cfg.Workdir = os.Getenv("CLAUDE_WORKDIR")
 	cfg.OllamaURL = envOr("OLLAMA_URL", "https://ollama.andres-wong.com")
 	cfg.UsageDBPath = envOr("USAGE_DB_PATH", "./usage.db")
+	cfg.MCPConfigPath = os.Getenv("MCP_CONFIG_PATH")
+	cfg.MCPAlways = os.Getenv("MCP_ALWAYS") == "true" || os.Getenv("MCP_ALWAYS") == "1"
 }
 
 func envOr(key, fallback string) string {
@@ -360,14 +370,88 @@ func lastUserMessage(messages []Message) string {
 	return ""
 }
 
+// ─── MCP config resolution ──────────────────────────────────────────────────
+
+// prepareMCPConfig resolves which MCP server config to hand to `claude --mcp-config`
+// for a single request. Server definitions (and any credentials) live ONLY in the
+// host-level registry at $MCP_CONFIG_PATH — never in this (public) repo.
+//
+// Priority:
+//  1. req.MCPConfig  — inline {"mcpServers":{...}} (fully self-contained caller)
+//  2. req.MCPServers — subset of the registry to enable (filtered into a temp file)
+//  3. cfg.MCPAlways  — use the whole registry as-is (MCP configured at server level)
+//  4. otherwise      — no MCP
+//
+// Returns the config path for `claude --mcp-config` ("" = none) and a cleanup func.
+func prepareMCPConfig(req ChatRequest) (string, func(), error) {
+	noop := func() {}
+
+	if len(req.MCPConfig) > 0 {
+		return writeTempMCP(req.MCPConfig)
+	}
+
+	if len(req.MCPServers) > 0 {
+		if cfg.MCPConfigPath == "" {
+			return "", noop, fmt.Errorf("mcp_servers requested but MCP_CONFIG_PATH is not set")
+		}
+		raw, err := os.ReadFile(cfg.MCPConfigPath)
+		if err != nil {
+			return "", noop, fmt.Errorf("read mcp registry: %w", err)
+		}
+		var reg struct {
+			MCPServers map[string]json.RawMessage `json:"mcpServers"`
+		}
+		if err := json.Unmarshal(raw, &reg); err != nil {
+			return "", noop, fmt.Errorf("parse mcp registry: %w", err)
+		}
+		filtered := map[string]json.RawMessage{}
+		for _, name := range req.MCPServers {
+			def, ok := reg.MCPServers[name]
+			if !ok {
+				return "", noop, fmt.Errorf("mcp server %q not found in registry", name)
+			}
+			filtered[name] = def
+		}
+		out, err := json.Marshal(map[string]any{"mcpServers": filtered})
+		if err != nil {
+			return "", noop, err
+		}
+		return writeTempMCP(out)
+	}
+
+	if cfg.MCPAlways && cfg.MCPConfigPath != "" {
+		return cfg.MCPConfigPath, noop, nil
+	}
+
+	return "", noop, nil
+}
+
+// writeTempMCP writes an MCP config to a temp file and returns its path + cleanup.
+func writeTempMCP(content []byte) (string, func(), error) {
+	f, err := os.CreateTemp("", "cc_bridge_mcp_*.json")
+	if err != nil {
+		return "", func() {}, err
+	}
+	if _, err := f.Write(content); err != nil {
+		f.Close()
+		os.Remove(f.Name())
+		return "", func() {}, err
+	}
+	f.Close()
+	return f.Name(), func() { os.Remove(f.Name()) }, nil
+}
+
 // ─── Claude invocation ────────────────────────────────────────────────────────
 
 type claudeArgs struct {
-	prompt       string
-	model        string
-	sessionID    string
-	newSessionID string
-	stream       bool
+	prompt        string
+	model         string
+	sessionID     string
+	newSessionID  string
+	stream        bool
+	mcpConfigPath string
+	allowedTools  []string
+	workdir       string
 }
 
 func buildArgs(a claudeArgs) []string {
@@ -388,6 +472,14 @@ func buildArgs(a claudeArgs) []string {
 	if cfg.SkipPerms {
 		args = append(args, "--dangerously-skip-permissions")
 	}
+	if a.mcpConfigPath != "" {
+		// --strict-mcp-config: ignore any host/user-level MCP config, use only ours.
+		args = append(args, "--mcp-config", a.mcpConfigPath, "--strict-mcp-config")
+	}
+	if len(a.allowedTools) > 0 {
+		// Allowlist: in headless (-p) mode, tools not listed here are denied (no prompt).
+		args = append(args, "--allowedTools", strings.Join(a.allowedTools, ","))
+	}
 	// The prompt is fed to `claude -p` via stdin (see runClaudeSync /
 	// runClaudeStream), NOT as an argv. Windows caps a process command line at
 	// ~32K chars and large architect prompts overflow it ("filename or
@@ -400,8 +492,12 @@ func runClaudeSync(a claudeArgs) (string, string, *ClaudeUsage, error) {
 	cmd := exec.Command(claudePath(), args...)
 	cmd.Env = os.Environ()
 	cmd.Stdin = strings.NewReader(a.prompt)
-	if cfg.Workdir != "" {
-		cmd.Dir = cfg.Workdir
+	workdir := cfg.Workdir
+	if a.workdir != "" {
+		workdir = a.workdir
+	}
+	if workdir != "" {
+		cmd.Dir = workdir
 	}
 
 	out, err := cmd.Output()
@@ -426,8 +522,12 @@ func runClaudeStream(w http.ResponseWriter, a claudeArgs, respID, model string) 
 	cmd := exec.Command(claudePath(), args...)
 	cmd.Env = os.Environ()
 	cmd.Stdin = strings.NewReader(a.prompt)
-	if cfg.Workdir != "" {
-		cmd.Dir = cfg.Workdir
+	workdir := cfg.Workdir
+	if a.workdir != "" {
+		workdir = a.workdir
+	}
+	if workdir != "" {
+		cmd.Dir = workdir
 	}
 
 	stdout, err := cmd.StdoutPipe()
@@ -682,6 +782,17 @@ func handleChat(w http.ResponseWriter, r *http.Request) {
 	var args claudeArgs
 	args.stream = req.Stream
 	args.model = model
+	args.workdir = req.Workdir
+	args.allowedTools = req.AllowedTools
+
+	mcpPath, cleanupMCP, mcpErr := prepareMCPConfig(req)
+	if mcpErr != nil {
+		log.Printf("mcp config error: %v", mcpErr)
+		http.Error(w, "mcp config error: "+mcpErr.Error(), http.StatusBadRequest)
+		return
+	}
+	defer cleanupMCP()
+	args.mcpConfigPath = mcpPath
 
 	if clientSessionID != "" {
 		if claudeID, ok := store.Get(clientSessionID); ok {
@@ -871,6 +982,7 @@ func main() {
 	log.Printf("  ollama url:    %s", cfg.OllamaURL)
 	log.Printf("  ollama num_ctx: 48000")
 	log.Printf("  usage db:      %s", cfg.UsageDBPath)
+	log.Printf("  mcp config:    %q (always=%v)", cfg.MCPConfigPath, cfg.MCPAlways)
 
 	if err := http.ListenAndServe(":"+cfg.Port, mux); err != nil {
 		log.Fatal(err)

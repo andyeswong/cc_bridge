@@ -2,3 +2,9 @@
 *.exe
 usage.db
 bridge.log
+
+# Local MCP server registry — holds credentials, keep out of this public repo.
+# Commit only mcp.example.json (placeholders).
+mcp.json
+mcp.*.json
+!mcp.example.json

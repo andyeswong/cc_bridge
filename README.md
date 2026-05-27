@@ -53,6 +53,8 @@ USAGE_DB_PATH=./usage.db \
 | `CLAUDE_AUTH_KEY`    | (empty)                    | Require `Authorization: Bearer <key>` if set     |
 | `OLLAMA_URL`         | `http://localhost:11434`   | Ollama base URL                                  |
 | `USAGE_DB_PATH`      | `./usage.db`               | SQLite database path (created automatically)     |
+| `MCP_CONFIG_PATH`    | (empty)                    | Path to the MCP server registry JSON (`{"mcpServers":{…}}`). Lives on the host, **never** in this repo. |
+| `MCP_ALWAYS`         | `false`                    | Load the whole registry on every Claude request (MCP configured at server level) |
 
 ## Model Routing
 
@@ -61,6 +63,40 @@ USAGE_DB_PATH=./usage.db \
 | `ollama/`      | Ollama   | `ollama/gemma4:e4b`         |
 | `ollama/`      | Ollama   | `ollama/qwen3:8b`           |
 | anything else  | Claude   | `claude-code`, `claude-sonnet-4-6` |
+
+## MCP — agentic tool use (Claude backend)
+
+Claude Code is itself an MCP client, so a **single** `/v1/chat/completions` call runs a
+full agentic loop and executes MCP tools internally — cc_bridge just forwards the right
+flags to `claude -p` (`--mcp-config`, `--strict-mcp-config`, `--allowedTools`).
+
+Server definitions (and their credentials) live **only** in a host-level registry file
+pointed to by `MCP_CONFIG_PATH` — never committed. See `mcp.example.json` for the shape
+(standard Claude Code `.mcp.json`).
+
+Per-request fields (extensions to the OpenAI body; vanilla clients ignore them):
+
+| Field           | Type       | Purpose                                                                 |
+|-----------------|------------|-------------------------------------------------------------------------|
+| `allowed_tools` | `string[]` | Allowlist. In headless mode, tools **not** listed are denied. e.g. `["mcp__projecthub__task_update","mcp__MCPControl"]` |
+| `mcp_servers`   | `string[]` | Subset of the registry to enable for this request                       |
+| `mcp_config`    | `object`   | Inline `{"mcpServers":{…}}`; overrides the registry (self-contained)    |
+| `workdir`       | `string`   | Working directory for the claude subprocess (e.g. the task's repo)      |
+
+```bash
+curl http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "claude-code",
+    "messages": [{"role":"user","content":"Mark task 123 done in ProjectHub"}],
+    "mcp_servers": ["projecthub"],
+    "allowed_tools": ["mcp__projecthub"],
+    "workdir": "/home/enteracloud/repos/myapp"
+  }'
+```
+
+Tool naming follows Claude Code: `mcp__<server>__<tool>`, or `mcp__<server>` to allow
+all tools from a server.
 
 ## API Endpoints
 
