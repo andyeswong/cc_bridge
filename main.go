@@ -26,6 +26,51 @@ type Message struct {
 	Content string `json:"content"`
 }
 
+type contentPart struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+// UnmarshalJSON accepts content as a plain string, an array of OpenAI content
+// blocks ([]{type,text}), or null. OpenAI-compatible clients (e.g. OpenClaw)
+// send content as a block array, which a plain `string` field cannot decode.
+func (m *Message) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		Role    string          `json:"role"`
+		Content json.RawMessage `json:"content"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	m.Role = raw.Role
+	m.Content = flattenContent(raw.Content)
+	return nil
+}
+
+func flattenContent(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	var s string
+	if json.Unmarshal(raw, &s) == nil { // content: "text"
+		return s
+	}
+	var parts []contentPart // content: [{"type":"text","text":"…"}]
+	if json.Unmarshal(raw, &parts) == nil {
+		var sb strings.Builder
+		for _, p := range parts {
+			if p.Text != "" {
+				if sb.Len() > 0 {
+					sb.WriteString("\n")
+				}
+				sb.WriteString(p.Text)
+			}
+		}
+		return sb.String()
+	}
+	return ""
+}
+
 type ChatRequest struct {
 	Model    string    `json:"model"`
 	Messages []Message `json:"messages"`
