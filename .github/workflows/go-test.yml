@@ -1,0 +1,49 @@
+name: Go Tests
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - dev
+      - 'feat/**'
+  pull_request:
+    branches:
+      - main
+      - master
+      - dev
+      - 'feat/**'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Run Go tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Show Go version
+        run: go version
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Verify formatting
+        run: |
+          test -z "$(gofmt -l .)"
+
+      - name: Run tests
+        run: go test -v ./...
+
+      - name: Run tests with race detector
+        run: go test -race ./...

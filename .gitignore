@@ -2,3 +2,6 @@
 *.exe
 usage.db
 bridge.log
+claude-bridge
+.env
+!cmd/claude-bridge
