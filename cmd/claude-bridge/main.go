@@ -62,7 +62,7 @@ func main() {
 	router := bridgehttp.NewRouter(bridgehttp.RouterDeps{
 		Config:           cfg,
 		ChatHandler:      handlers.NewChatHandler(chatService),
-		ModelsHandler:    handlers.NewModelsHandler(),
+		ModelsHandler:    handlers.NewModelsHandler(reg),
 		UsageHandler:     handlers.NewUsageHandler(usageService),
 		HealthHandler:    handlers.NewHealthHandler(cfg),
 		DashboardHandler: handlers.NewDashboardHandler(usageService),

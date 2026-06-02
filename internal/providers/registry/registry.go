@@ -51,6 +51,14 @@ func (r *Registry) Empty() bool {
 	return len(r.providers) == 0
 }
 
+func (r *Registry) Providers() []*ExternalProvider {
+	list := make([]*ExternalProvider, 0, len(r.providers))
+	for _, p := range r.providers {
+		list = append(list, p)
+	}
+	return list
+}
+
 // Resolve finds an external provider for the given model string.
 // Supports three formats:
 //   - "provider,model"  — explicit provider selection (e.g. "ollama,qwen3-coder:latest")
