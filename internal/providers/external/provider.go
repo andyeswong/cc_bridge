@@ -29,11 +29,11 @@ func New(ep *registry.ExternalProvider) *Provider {
 }
 
 type requestBody struct {
-	Model      string          `json:"model"`
+	Model      string           `json:"model"`
 	Messages   []domain.Message `json:"messages"`
-	Stream     bool            `json:"stream"`
-	Tools      []domain.Tool   `json:"tools,omitempty"`
-	ToolChoice json.RawMessage `json:"tool_choice,omitempty"`
+	Stream     bool             `json:"stream"`
+	Tools      []domain.Tool    `json:"tools,omitempty"`
+	ToolChoice json.RawMessage  `json:"tool_choice,omitempty"`
 }
 
 func (p *Provider) Chat(

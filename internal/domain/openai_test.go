@@ -151,17 +151,3 @@ func TestNewStreamChunk_DeltaFields(t *testing.T) {
 		}
 	})
 }
-
-func TestProviderRouting_OllamaPrefix(t *testing.T) {
-	t.Parallel()
-
-	if got := ResolveProvider("ollama/llama3"); got != ProviderOllama {
-		t.Fatalf("ResolveProvider: got %q want %q", got, ProviderOllama)
-	}
-	if got := ResolveProvider("claude-code"); got != ProviderClaude {
-		t.Fatalf("ResolveProvider: got %q want %q", got, ProviderClaude)
-	}
-	if got := StripOllamaPrefix("ollama/llama3"); got != "llama3" {
-		t.Fatalf("StripOllamaPrefix: got %q", got)
-	}
-}

@@ -7,17 +7,17 @@ import (
 )
 
 type Config struct {
-	Host               string
-	Port               string
-	ClaudeBin          string
-	ClaudeWorkdir      string
-	ClaudeSkipPerms    bool
-	ClaudeDefaultModel string
-	OllamaURL          string
-	UsageDBPath        string
-	LocalAuthKey       string
-	MCPConfigPath      string
-	MCPAlways          bool
+	Host                string
+	Port                string
+	ClaudeBin           string
+	ClaudeWorkdir       string
+	ClaudeSkipPerms     bool
+	ClaudeDefaultModel  string
+	OllamaURL           string
+	UsageDBPath         string
+	LocalAuthKey        string
+	MCPConfigPath       string
+	MCPAlways           bool
 	ProvidersConfigPath string
 }
 
