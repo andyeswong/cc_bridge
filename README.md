@@ -618,6 +618,22 @@ Example response:
 curl http://127.0.0.1:8080/v1/models
 ```
 
+Returns all Claude Code models plus every model declared in the provider registry:
+
+```json
+{
+  "object": "list",
+  "data": [
+    {"id": "claude-code",          "owned_by": "anthropic"},
+    {"id": "claude-sonnet-4-6",    "owned_by": "anthropic"},
+    {"id": "ollama,qwen3-coder:latest", "owned_by": "ollama"},
+    {"id": "deepseek,deepseek-chat",    "owned_by": "deepseek"}
+  ]
+}
+```
+
+Model IDs from the registry follow the `provider,model` format and can be used directly in `/v1/chat/completions`.
+
 ## Usage Dashboard
 
 Open in browser:
