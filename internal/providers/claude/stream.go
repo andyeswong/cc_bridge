@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
 	"strings"
 
@@ -64,7 +63,7 @@ func (p *Provider) runStream(
 	args := buildArgs(p.cfg, input)
 
 	cmd := exec.CommandContext(ctx, binaryPath(p.cfg), args...)
-	cmd.Env = os.Environ()
+	cmd.Env = p.processEnv()
 	cmd.Stdin = strings.NewReader(input.Prompt)
 
 	workdir := p.cfg.ClaudeWorkdir

@@ -57,7 +57,7 @@ func main() {
 
 	reg := registry.New(bridgeCfg)
 
-	chatService := services.NewChatService(cfg, claudeProvider, reg, usageService)
+	chatService := services.NewChatService(cfg, claudeProvider, reg, claudeSessions, usageService)
 
 	router := bridgehttp.NewRouter(bridgehttp.RouterDeps{
 		Config:           cfg,

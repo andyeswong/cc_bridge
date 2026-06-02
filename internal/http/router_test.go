@@ -9,6 +9,7 @@ import (
 	"claude-bridge/internal/config"
 	"claude-bridge/internal/domain"
 	"claude-bridge/internal/http/handlers"
+	"claude-bridge/internal/providers/registry"
 )
 
 func TestHealth_Unprotected(t *testing.T) {
@@ -25,7 +26,7 @@ func TestHealth_Unprotected(t *testing.T) {
 	router := NewRouter(RouterDeps{
 		Config:        cfg,
 		HealthHandler: handlers.NewHealthHandler(cfg),
-		ModelsHandler: handlers.NewModelsHandler(),
+		ModelsHandler: handlers.NewModelsHandler(registry.New(nil)),
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
@@ -52,7 +53,7 @@ func TestModels_ReturnsOpenAIList(t *testing.T) {
 	router := NewRouter(RouterDeps{
 		Config:        cfg,
 		HealthHandler: handlers.NewHealthHandler(cfg),
-		ModelsHandler: handlers.NewModelsHandler(),
+		ModelsHandler: handlers.NewModelsHandler(registry.New(nil)),
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
@@ -95,7 +96,7 @@ func TestLocalAuthMiddleware(t *testing.T) {
 			router := NewRouter(RouterDeps{
 				Config:        cfg,
 				HealthHandler: handlers.NewHealthHandler(cfg),
-				ModelsHandler: handlers.NewModelsHandler(),
+				ModelsHandler: handlers.NewModelsHandler(registry.New(nil)),
 			})
 
 			req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)

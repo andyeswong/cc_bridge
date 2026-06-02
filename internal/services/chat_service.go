@@ -3,8 +3,10 @@ package services
 import (
 	"claude-bridge/internal/config"
 	"claude-bridge/internal/domain"
+	"claude-bridge/internal/providers/claude"
 	"claude-bridge/internal/providers/external"
 	"claude-bridge/internal/providers/registry"
+	"claude-bridge/internal/sessions"
 	"context"
 	"io"
 	"time"
@@ -29,25 +31,30 @@ type ChatProvider interface {
 }
 
 type ChatService struct {
-	cfg          config.Config
-	claude       ChatProvider
-	registry     *registry.Registry
-	extProviders map[string]*external.Provider
-	usageService *UsageService
+	cfg             config.Config
+	claude          ChatProvider
+	registry        *registry.Registry
+	extProviders    map[string]*external.Provider
+	backedProviders map[string]*claude.Provider
+	claudeSessions  *sessions.MemoryStore[string]
+	usageService    *UsageService
 }
 
 func NewChatService(
 	cfg config.Config,
-	claude ChatProvider,
+	claudeProvider ChatProvider,
 	reg *registry.Registry,
+	claudeSessions *sessions.MemoryStore[string],
 	usageService *UsageService,
 ) *ChatService {
 	return &ChatService{
-		cfg:          cfg,
-		claude:       claude,
-		registry:     reg,
-		extProviders: make(map[string]*external.Provider),
-		usageService: usageService,
+		cfg:             cfg,
+		claude:          claudeProvider,
+		registry:        reg,
+		extProviders:    make(map[string]*external.Provider),
+		backedProviders: make(map[string]*claude.Provider),
+		claudeSessions:  claudeSessions,
+		usageService:    usageService,
 	}
 }
 
@@ -112,6 +119,12 @@ func (s *ChatService) Stream(
 func (s *ChatService) resolveExecutor(model string) (ChatProvider, string, string) {
 	if s.registry != nil && !s.registry.Empty() {
 		if match := s.registry.Resolve(model); match != nil {
+			// "claude" driver: run Claude Code (body) with this provider as the brain.
+			if match.Provider.Driver == "claude" {
+				p := s.getOrCreateBackedProvider(match.Provider)
+				return p, match.TargetModel, match.Provider.Name
+			}
+			// default: generic OpenAI-compatible HTTP passthrough.
 			p := s.getOrCreateExtProvider(match.Provider)
 			return p, match.TargetModel, match.Provider.Name
 		}
@@ -126,6 +139,15 @@ func (s *ChatService) getOrCreateExtProvider(ep *registry.ExternalProvider) *ext
 	}
 	p := external.New(ep)
 	s.extProviders[ep.Name] = p
+	return p
+}
+
+func (s *ChatService) getOrCreateBackedProvider(ep *registry.ExternalProvider) *claude.Provider {
+	if p, ok := s.backedProviders[ep.Name]; ok {
+		return p
+	}
+	p := claude.NewBackedProvider(s.cfg, s.claudeSessions, ep.BaseURL, ep.APIKey)
+	s.backedProviders[ep.Name] = p
 	return p
 }
 

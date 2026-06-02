@@ -19,6 +19,13 @@ import (
 type Provider struct {
 	cfg      config.Config
 	sessions *sessions.MemoryStore[string]
+
+	// Optional Anthropic backend override. When set, the Claude Code subprocess
+	// is pointed at this base URL (e.g. an Ollama instance serving the Anthropic
+	// Messages API) instead of the real Anthropic API — running the Claude Code
+	// harness (bash, MCP, tool loop) on a different brain. Empty = real Anthropic.
+	anthropicBaseURL   string
+	anthropicAuthToken string
 }
 
 type Result struct {
@@ -39,6 +46,36 @@ func NewProvider(cfg config.Config, sessionStore *sessions.MemoryStore[string]) 
 		cfg:      cfg,
 		sessions: sessionStore,
 	}
+}
+
+// NewBackedProvider builds a Claude Code provider whose subprocess is pointed at
+// an alternate Anthropic-compatible backend (base URL + auth token). This lets
+// the Claude Code agentic harness (bash, MCP, tools) run on any brain that speaks
+// the Anthropic Messages API — e.g. Ollama v0.20+ serving /v1/messages.
+func NewBackedProvider(cfg config.Config, sessionStore *sessions.MemoryStore[string], baseURL, authToken string) *Provider {
+	return &Provider{
+		cfg:                cfg,
+		sessions:           sessionStore,
+		anthropicBaseURL:   baseURL,
+		anthropicAuthToken: authToken,
+	}
+}
+
+// processEnv returns the subprocess environment, injecting the Anthropic backend
+// override when this provider is backed by a custom brain.
+func (p *Provider) processEnv() []string {
+	env := os.Environ()
+	if p.anthropicBaseURL != "" {
+		token := p.anthropicAuthToken
+		if token == "" {
+			token = "ollama"
+		}
+		env = append(env,
+			"ANTHROPIC_BASE_URL="+p.anthropicBaseURL,
+			"ANTHROPIC_AUTH_TOKEN="+token,
+		)
+	}
+	return env
 }
 
 func (p *Provider) Chat(
@@ -125,7 +162,7 @@ func (p *Provider) runSync(ctx context.Context, input cliArgs) (string, *UsageRe
 	args := buildArgs(p.cfg, input)
 
 	cmd := exec.CommandContext(ctx, binaryPath(p.cfg), args...)
-	cmd.Env = os.Environ()
+	cmd.Env = p.processEnv()
 	cmd.Stdin = strings.NewReader(input.Prompt)
 
 	workdir := p.cfg.ClaudeWorkdir

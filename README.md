@@ -325,6 +325,46 @@ Configure any OpenAI-compatible provider in `~/.cc_bridge/config.json` (or set `
 
 When no config file is found and `OLLAMA_URL` is set, an `ollama` provider is auto-registered pointing at that URL (backward compatible).
 
+### Provider Drivers
+
+Each provider has a `driver` that decides how its requests are executed:
+
+| Driver | Behaviour |
+|---|---|
+| `openai` (default) | Generic OpenAI-compatible HTTP passthrough. The configured model is both brain and responder — cc_bridge forwards the request and returns the response verbatim (including any `tool_calls`, which the **caller** is responsible for executing). |
+| `claude` | Runs the **Claude Code CLI** (full agentic harness: bash, file ops, MCP, tool loop) with `ANTHROPIC_BASE_URL` pointed at the provider's `api_base_url`. Claude Code becomes the **body**; the configured model becomes the **brain**. Tools execute for real. |
+
+#### Swapping Claude Code's brain (`driver: "claude"`)
+
+Claude Code normally runs on Anthropic models. With a `claude`-driver provider you can point its harness at any backend that speaks the **Anthropic Messages API** (e.g. Ollama v0.20+ serving `/v1/messages`), so a local/cheap model drives Claude Code's bash and tools:
+
+```json
+{
+  "providers": [
+    {
+      "name": "claude-minimax",
+      "driver": "claude",
+      "api_base_url": "http://localhost:11434",
+      "api_key": "ollama",
+      "models": ["minimax-m2.7:cloud"]
+    }
+  ]
+}
+```
+
+```bash
+curl http://127.0.0.1:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "claude-minimax,minimax-m2.7:cloud",
+    "messages": [{"role": "user", "content": "run: ping -c 4 google.com and report the latencies"}]
+  }'
+```
+
+cc_bridge launches `claude --model minimax-m2.7:cloud` with `ANTHROPIC_BASE_URL=http://localhost:11434` + `ANTHROPIC_AUTH_TOKEN=ollama`. Claude Code's harness (bash) executes the ping for real, piloted by minimax — not Anthropic. The Anthropic traffic flows Claude Code → the backend directly; cc_bridge only orchestrates the subprocess.
+
+> Requires a backend that serves the Anthropic Messages API. Ollama v0.20+ does this natively at `/v1/messages`.
+
 ## Model Routing
 
 Requests are resolved in this order:
@@ -337,7 +377,8 @@ Requests are resolved in this order:
 | `provider,model` | `ollama,qwen3-coder:latest` | Provider named `ollama`, model `qwen3-coder:latest` |
 | `provider/model` | `ollama/llama3.2` | Provider named `ollama`, model `llama3.2` |
 | bare model name | `qwen3-coder:latest` | First provider that declares it in `models[]` |
-| anything else | `claude-code` | Claude Code CLI |
+| `claude`-driver provider | `claude-minimax,minimax-m2.7:cloud` | Claude Code CLI with that backend as the brain |
+| anything else | `claude-code` | Claude Code CLI (real Anthropic) |
 
 ### Tool Use with External Providers
 

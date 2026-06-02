@@ -11,6 +11,13 @@ type ProviderConfig struct {
 	APIBaseURL string   `json:"api_base_url"`
 	APIKey     string   `json:"api_key"`
 	Models     []string `json:"models"`
+
+	// Driver selects how requests to this provider are executed:
+	//   "" / "openai" — generic OpenAI-compatible HTTP passthrough (the model is the brain)
+	//   "claude"      — run the Claude Code CLI (full agentic harness: bash, MCP, tools)
+	//                   with ANTHROPIC_BASE_URL pointed at api_base_url, so Claude Code
+	//                   acts as the body and the configured model is the brain.
+	Driver string `json:"driver,omitempty"`
 }
 
 type RouterConfig struct {

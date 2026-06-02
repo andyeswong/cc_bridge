@@ -11,6 +11,7 @@ type ExternalProvider struct {
 	BaseURL string
 	APIKey  string
 	Models  []string
+	Driver  string // "" / "openai" = HTTP passthrough; "claude" = Claude Code body with this backend as brain
 }
 
 type RouteMatch struct {
@@ -41,6 +42,7 @@ func New(cfg *config.BridgeConfig) *Registry {
 			BaseURL: p.APIBaseURL,
 			APIKey:  p.APIKey,
 			Models:  p.Models,
+			Driver:  p.Driver,
 		}
 	}
 
