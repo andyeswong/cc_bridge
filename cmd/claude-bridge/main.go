@@ -3,14 +3,14 @@ package main
 import (
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"claude-bridge/internal/config"
-	"claude-bridge/internal/domain"
 	bridgehttp "claude-bridge/internal/http"
 	"claude-bridge/internal/http/handlers"
 	"claude-bridge/internal/providers/claude"
-	"claude-bridge/internal/providers/ollama"
+	"claude-bridge/internal/providers/registry"
 	"claude-bridge/internal/services"
 	"claude-bridge/internal/sessions"
 	"claude-bridge/internal/storage"
@@ -33,31 +33,34 @@ func main() {
 		1000,
 	)
 
-	ollamaSessions := sessions.NewMemoryStore[[]domain.Message](
-		2*time.Hour,
-		1000,
-	)
+	claudeProvider := claude.NewProvider(cfg, claudeSessions)
 
-	claudeProvider := claude.NewProvider(
-		cfg,
-		claudeSessions,
-	)
+	bridgeCfg, err := config.LoadBridgeConfig(cfg.ProvidersConfigPath)
+	if err != nil {
+		log.Printf("warning: failed to load providers config: %v", err)
+	}
 
-	ollamaProvider := ollama.NewProvider(
-		cfg,
-		ollamaSessions,
-	)
+	// Auto-register legacy OLLAMA_URL as an "ollama" provider when no config file
+	// is present, for backward compatibility.
+	if bridgeCfg == nil && cfg.OllamaURL != "" {
+		bridgeCfg = &config.BridgeConfig{
+			Providers: []config.ProviderConfig{
+				{
+					Name:       "ollama",
+					APIBaseURL: strings.TrimRight(cfg.OllamaURL, "/") + "/v1",
+					APIKey:     "ollama",
+				},
+			},
+		}
+		log.Printf("ollama auto-registered from OLLAMA_URL=%s (migrate to CCB_CONFIG_PATH for full control)", cfg.OllamaURL)
+	}
 
-	chatService := services.NewChatService(
-		cfg,
-		claudeProvider,
-		ollamaProvider,
-		usageService,
-	)
+	reg := registry.New(bridgeCfg)
+
+	chatService := services.NewChatService(cfg, claudeProvider, reg, usageService)
 
 	router := bridgehttp.NewRouter(bridgehttp.RouterDeps{
-		Config: cfg,
-
+		Config:           cfg,
 		ChatHandler:      handlers.NewChatHandler(chatService),
 		ModelsHandler:    handlers.NewModelsHandler(),
 		UsageHandler:     handlers.NewUsageHandler(usageService),
@@ -81,7 +84,7 @@ func main() {
 	log.Printf("dashboard:     http://%s/dashboard", address)
 	log.Printf("health:        http://%s/health", address)
 	log.Printf("usage db:      %s", cfg.UsageDBPath)
-	log.Printf("ollama url:    %s", cfg.OllamaURL)
+	log.Printf("providers:     %d registered", bridgeCfg.CountProviders())
 	log.Printf("auth enabled:  %v", cfg.LocalAuthKey != "")
 	log.Printf("mcp config:    %q", cfg.MCPConfigPath)
 	log.Printf("mcp always:    %v", cfg.MCPAlways)

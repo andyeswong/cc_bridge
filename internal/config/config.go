@@ -18,22 +18,24 @@ type Config struct {
 	LocalAuthKey       string
 	MCPConfigPath      string
 	MCPAlways          bool
+	ProvidersConfigPath string
 }
 
 func Load() Config {
 	godotenv.Load()
 	return Config{
-		Host:               envOr("HOST", "127.0.0.1"),
-		Port:               envOr("PORT", "8080"),
-		ClaudeBin:          envOr("CLAUDE_BIN", ""),
-		ClaudeWorkdir:      envOr("CLAUDE_WORKDIR", ""),
-		ClaudeSkipPerms:    boolEnv("CLAUDE_SKIP_PERMS"),
-		ClaudeDefaultModel: envOr("CLAUDE_DEFAULT_MODEL", "llama2"),
-		OllamaURL:          envOr("OLLAMA_URL", "http://localhost:11434"),
-		UsageDBPath:        envOr("USAGE_DB_PATH", "usage.db"),
-		LocalAuthKey:       envOr("LOCAL_AUTH_KEY", ""),
-		MCPConfigPath:      envOr("MCP_CONFIG_PATH", ""),
-		MCPAlways:          boolEnv("MCP_ALWAYS"),
+		Host:                envOr("HOST", "127.0.0.1"),
+		Port:                envOr("PORT", "8080"),
+		ClaudeBin:           envOr("CLAUDE_BIN", ""),
+		ClaudeWorkdir:       envOr("CLAUDE_WORKDIR", ""),
+		ClaudeSkipPerms:     boolEnv("CLAUDE_SKIP_PERMS"),
+		ClaudeDefaultModel:  envOr("CLAUDE_DEFAULT_MODEL", "llama2"),
+		OllamaURL:           envOr("OLLAMA_URL", "http://localhost:11434"),
+		UsageDBPath:         envOr("USAGE_DB_PATH", "usage.db"),
+		LocalAuthKey:        envOr("LOCAL_AUTH_KEY", ""),
+		MCPConfigPath:       envOr("MCP_CONFIG_PATH", ""),
+		MCPAlways:           boolEnv("MCP_ALWAYS"),
+		ProvidersConfigPath: envOr("CCB_CONFIG_PATH", ""),
 	}
 }
 

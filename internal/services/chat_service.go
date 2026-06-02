@@ -3,9 +3,10 @@ package services
 import (
 	"claude-bridge/internal/config"
 	"claude-bridge/internal/domain"
+	"claude-bridge/internal/providers/external"
+	"claude-bridge/internal/providers/registry"
 	"context"
 	"io"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -30,20 +31,22 @@ type ChatProvider interface {
 type ChatService struct {
 	cfg          config.Config
 	claude       ChatProvider
-	ollama       ChatProvider
+	registry     *registry.Registry
+	extProviders map[string]*external.Provider
 	usageService *UsageService
 }
 
 func NewChatService(
 	cfg config.Config,
 	claude ChatProvider,
-	ollama ChatProvider,
+	reg *registry.Registry,
 	usageService *UsageService,
 ) *ChatService {
 	return &ChatService{
 		cfg:          cfg,
 		claude:       claude,
-		ollama:       ollama,
+		registry:     reg,
+		extProviders: make(map[string]*external.Provider),
 		usageService: usageService,
 	}
 }
@@ -55,16 +58,15 @@ func (s *ChatService) Chat(
 ) (*domain.ChatResponse, error) {
 	req.Model = s.resolveModel(req.Model)
 
-	providerName := domain.ResolveProvider(req.Model)
-	provider := s.resolveProvider(providerName)
+	provider, targetModel, providerName := s.resolveExecutor(req.Model)
+	req.Model = targetModel
 
 	start := time.Now()
 
 	resp, usage, err := provider.Chat(ctx, req, clientSessionID)
 
 	durationMs := int(time.Since(start).Milliseconds())
-
-	s.logUsage(req.Model, providerName, usage, durationMs, err != nil)
+	s.logUsage(targetModel, providerName, usage, durationMs, err != nil)
 
 	if err != nil {
 		return nil, err
@@ -89,31 +91,45 @@ func (s *ChatService) Stream(
 ) error {
 	req.Model = s.resolveModel(req.Model)
 
-	providerName := domain.ResolveProvider(req.Model)
-	provider := s.resolveProvider(providerName)
+	provider, targetModel, providerName := s.resolveExecutor(req.Model)
+	req.Model = targetModel
 
 	responseID := "chatcmpl-" + uuid.NewString()
 
 	start := time.Now()
 
-	usage, err := provider.Stream(
-		ctx,
-		writer,
-		req,
-		clientSessionID,
-		responseID,
-	)
+	usage, err := provider.Stream(ctx, writer, req, clientSessionID, responseID)
 
 	durationMs := int(time.Since(start).Milliseconds())
-
-	s.logUsage(req.Model, providerName, usage, durationMs, err != nil)
+	s.logUsage(targetModel, providerName, usage, durationMs, err != nil)
 
 	return err
 }
 
-func (s *ChatService) resolveModel(model string) string {
-	model = strings.TrimSpace(model)
+// resolveExecutor returns the provider, the target model name (with provider prefix
+// stripped), and a provider label for usage logging.
+// Priority: registry match → Claude Code fallback.
+func (s *ChatService) resolveExecutor(model string) (ChatProvider, string, string) {
+	if s.registry != nil && !s.registry.Empty() {
+		if match := s.registry.Resolve(model); match != nil {
+			p := s.getOrCreateExtProvider(match.Provider)
+			return p, match.TargetModel, match.Provider.Name
+		}
+	}
 
+	return s.claude, model, string(domain.ProviderClaude)
+}
+
+func (s *ChatService) getOrCreateExtProvider(ep *registry.ExternalProvider) *external.Provider {
+	if p, ok := s.extProviders[ep.Name]; ok {
+		return p
+	}
+	p := external.New(ep)
+	s.extProviders[ep.Name] = p
+	return p
+}
+
+func (s *ChatService) resolveModel(model string) string {
 	if model != "" {
 		return model
 	}
@@ -125,24 +141,16 @@ func (s *ChatService) resolveModel(model string) string {
 	return domain.DefaultClaudeModel
 }
 
-func (s *ChatService) resolveProvider(providerName domain.ProviderName) ChatProvider {
-	if providerName == domain.ProviderOllama {
-		return s.ollama
-	}
-
-	return s.claude
-}
-
 func (s *ChatService) logUsage(
 	model string,
-	provider domain.ProviderName,
+	providerName string,
 	usage *domain.Usage,
 	durationMs int,
 	isError bool,
 ) {
 	input := domain.UsageLogInput{
 		Model:      model,
-		Provider:   provider,
+		Provider:   domain.ProviderName(providerName),
 		DurationMs: durationMs,
 		IsError:    isError,
 	}

@@ -8,9 +8,33 @@ import (
 	"github.com/google/uuid"
 )
 
+type ToolCallFunction struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+}
+
+type ToolCall struct {
+	ID       string           `json:"id"`
+	Type     string           `json:"type"`
+	Function ToolCallFunction `json:"function"`
+}
+
+type ToolFunction struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	Parameters  json.RawMessage `json:"parameters,omitempty"`
+}
+
+type Tool struct {
+	Type     string       `json:"type"`
+	Function ToolFunction `json:"function"`
+}
+
 type Message struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role       string     `json:"role"`
+	Content    string     `json:"content,omitempty"`
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
 }
 
 type contentPart struct {
@@ -20,8 +44,10 @@ type contentPart struct {
 
 func (m *Message) UnmarshalJSON(data []byte) error {
 	var raw struct {
-		Role    string          `json:"role"`
-		Content json.RawMessage `json:"content"`
+		Role       string          `json:"role"`
+		Content    json.RawMessage `json:"content"`
+		ToolCalls  []ToolCall      `json:"tool_calls"`
+		ToolCallID string          `json:"tool_call_id"`
 	}
 
 	if err := json.Unmarshal(data, &raw); err != nil {
@@ -30,6 +56,8 @@ func (m *Message) UnmarshalJSON(data []byte) error {
 
 	m.Role = raw.Role
 	m.Content = flattenContent(raw.Content)
+	m.ToolCalls = raw.ToolCalls
+	m.ToolCallID = raw.ToolCallID
 
 	return nil
 }
@@ -75,15 +103,28 @@ type ChatRequest struct {
 	Messages []Message `json:"messages"`
 	Stream   bool      `json:"stream"`
 
+	// OpenAI-compatible tool use
+	Tools      []Tool          `json:"tools,omitempty"`
+	ToolChoice json.RawMessage `json:"tool_choice,omitempty"`
+
+	// Claude Code extensions
 	AllowedTools []string        `json:"allowed_tools,omitempty"`
 	MCPServers   []string        `json:"mcp_servers,omitempty"`
 	MCPConfig    json.RawMessage `json:"mcp_config,omitempty"`
 	Workdir      string          `json:"workdir,omitempty"`
 }
 
+type DeltaToolCall struct {
+	Index    int              `json:"index,omitempty"`
+	ID       string           `json:"id,omitempty"`
+	Type     string           `json:"type,omitempty"`
+	Function ToolCallFunction `json:"function,omitempty"`
+}
+
 type Delta struct {
-	Role    string `json:"role,omitempty"`
-	Content string `json:"content,omitempty"`
+	Role      string          `json:"role,omitempty"`
+	Content   string          `json:"content,omitempty"`
+	ToolCalls []DeltaToolCall `json:"tool_calls,omitempty"`
 }
 
 type Choice struct {

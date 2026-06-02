@@ -1,32 +1,30 @@
 # claude-bridge
 
-OpenAI-compatible local API bridge that routes requests to either the Claude Code CLI or a local Ollama instance, with SQLite usage tracking, Gorm persistence, Gin HTTP routing, in-memory sessions, and a built-in dashboard.
+OpenAI-compatible API bridge that routes requests to Claude Code CLI or any configured external provider (Ollama, DeepSeek, OpenRouter, etc.), with a provider registry, full tool/tool_calls passthrough, SQLite usage tracking, streaming SSE, and a built-in dashboard.
 
 ## Features
 
 - OpenAI-compatible REST API:
   - `/v1/chat/completions`
   - `/v1/models`
-- Streaming support using Server-Sent Events:
-  - `stream: true`
-- **Claude Code backend**
+- Streaming support using Server-Sent Events (`stream: true`)
+- **Claude Code backend** — default executor, fallback for all unmatched models
   - Stateless requests
   - Stateful sessions using `X-Session-ID`
+  - MCP tools, `allowed_tools`, `workdir` support
   - Uses the local `claude` CLI
-- **Ollama backend**
-  - Routes requests to a local Ollama instance
-  - Uses the `ollama/` model prefix
+- **Provider registry** — configure any OpenAI-compatible provider
+  - Declare providers in `~/.cc_bridge/config.json`
+  - Route by `provider,model` or `provider/model` format
+  - Full `tools`, `tool_calls`, `tool_choice` passthrough
+  - Streaming SSE passthrough with usage capture
+  - Backward compatible: `OLLAMA_URL` auto-registers as `ollama` provider
 - **SQLite usage tracking**
   - Powered by Gorm
   - Logs model, provider, tokens, duration, and errors
-- **Built-in dashboard**
-  - Available at `/dashboard`
-  - Auto-refreshes every 30 seconds
-- **Usage JSON API**
-  - Summary: `/v1/usage`
-  - Recent records: `/v1/usage/recent`
-- Optional local `Authorization: Bearer` auth key
-- Designed as a local developer tool
+- **Built-in dashboard** at `/dashboard`
+- **Usage JSON API** — `/v1/usage` and `/v1/usage/recent`
+- Optional `Authorization: Bearer` auth key
 
 ## Requirements
 
@@ -45,14 +43,18 @@ claude-bridge/
 │
 ├─ internal/
 │  ├─ config/
+│  │  ├─ config.go        # env-based config
+│  │  └─ providers.go     # BridgeConfig loader (~/.cc_bridge/config.json)
 │  ├─ domain/
 │  ├─ http/
 │  │  ├─ handlers/
 │  │  ├─ middleware/
 │  │  └─ router.go
 │  ├─ providers/
-│  │  ├─ claude/
-│  │  └─ ollama/
+│  │  ├─ claude/          # Claude Code CLI executor
+│  │  ├─ external/        # Generic OpenAI-compatible HTTP provider
+│  │  ├─ ollama/          # Legacy Ollama provider (kept for reference)
+│  │  └─ registry/        # Provider registry + route resolution
 │  ├─ services/
 │  ├─ sessions/
 │  └─ storage/
@@ -257,7 +259,8 @@ For most local development workflows, run `claude-bridge` directly on the host w
 | `CLAUDE_WORKDIR` | empty | Working directory for the Claude subprocess. |
 | `CLAUDE_SKIP_PERMS` | `false` | Pass `--dangerously-skip-permissions` to Claude. Use with caution. |
 | `CLAUDE_DEFAULT_MODEL` | `claude-code` | Default model when none is specified. |
-| `OLLAMA_URL` | `http://localhost:11434` locally, `http://host.docker.internal:11434` in Docker | Ollama base URL. |
+| `OLLAMA_URL` | `http://localhost:11434` locally, `http://host.docker.internal:11434` in Docker | Legacy Ollama URL. Auto-registers an `ollama` provider when no config file is present. |
+| `CCB_CONFIG_PATH` | `~/.cc_bridge/config.json` | Path to the provider registry config file. |
 | `USAGE_DB_PATH` | `./usage.db` locally, `/data/usage.db` in Docker | SQLite database path. Created automatically. |
 
 ## `.env.example`
@@ -273,7 +276,11 @@ CLAUDE_WORKDIR=
 CLAUDE_DEFAULT_MODEL=claude-code
 CLAUDE_SKIP_PERMS=false
 
+# Legacy: auto-registers an "ollama" provider when CCB_CONFIG_PATH is not set
 OLLAMA_URL=http://localhost:11434
+
+# Provider registry config (preferred over OLLAMA_URL)
+CCB_CONFIG_PATH=
 
 USAGE_DB_PATH=./usage.db
 ```
@@ -287,13 +294,80 @@ OLLAMA_URL=http://host.docker.internal:11434
 USAGE_DB_PATH=/data/usage.db
 ```
 
+## Provider Registry
+
+Configure any OpenAI-compatible provider in `~/.cc_bridge/config.json` (or set `CCB_CONFIG_PATH`):
+
+```json
+{
+  "providers": [
+    {
+      "name": "ollama",
+      "api_base_url": "http://localhost:11434/v1",
+      "api_key": "ollama",
+      "models": ["qwen3-coder:latest", "llama3.2:latest"]
+    },
+    {
+      "name": "deepseek",
+      "api_base_url": "https://api.deepseek.com/v1",
+      "api_key": "sk-your-key",
+      "models": ["deepseek-chat", "deepseek-reasoner"]
+    },
+    {
+      "name": "openrouter",
+      "api_base_url": "https://openrouter.ai/api/v1",
+      "api_key": "sk-or-your-key",
+      "models": []
+    }
+  ]
+}
+```
+
+When no config file is found and `OLLAMA_URL` is set, an `ollama` provider is auto-registered pointing at that URL (backward compatible).
+
 ## Model Routing
 
-| Model prefix | Backend | Example |
+Requests are resolved in this order:
+
+1. **Registry match** → routes to the configured external provider
+2. **Claude Code fallback** → all unmatched models go to the Claude Code CLI
+
+| Format | Example | Resolves to |
 |---|---|---|
-| `ollama/` | Ollama | `ollama/llama3.2` |
-| `ollama/` | Ollama | `ollama/qwen3:8b` |
-| Anything else | Claude Code CLI | `claude-code`, `claude-sonnet-4-6` |
+| `provider,model` | `ollama,qwen3-coder:latest` | Provider named `ollama`, model `qwen3-coder:latest` |
+| `provider/model` | `ollama/llama3.2` | Provider named `ollama`, model `llama3.2` |
+| bare model name | `qwen3-coder:latest` | First provider that declares it in `models[]` |
+| anything else | `claude-code` | Claude Code CLI |
+
+### Tool Use with External Providers
+
+External providers receive the full `tools`, `tool_calls`, and `tool_choice` fields — nothing is stripped. Any provider that supports OpenAI-compatible tool calling (Ollama, DeepSeek, etc.) will work end-to-end:
+
+```bash
+curl http://127.0.0.1:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "ollama,qwen3-coder:latest",
+    "messages": [{"role": "user", "content": "list files in /tmp"}],
+    "tools": [
+      {
+        "type": "function",
+        "function": {
+          "name": "run_command",
+          "description": "Execute a shell command",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "command": {"type": "string"}
+            },
+            "required": ["command"]
+          }
+        }
+      }
+    ],
+    "tool_choice": "auto"
+  }'
+```
 
 ## MCP Support
 
