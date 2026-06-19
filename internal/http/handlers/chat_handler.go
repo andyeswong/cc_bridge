@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -34,6 +35,15 @@ func (h *ChatHandler) Create(c *gin.Context) {
 			"error": "messages required",
 		})
 		return
+	}
+
+	// No-exec (plan-only) can be requested via header too. It's a one-shot
+	// planning call, so streaming is disabled.
+	if h := c.GetHeader("X-CC-No-Exec"); h == "1" || strings.EqualFold(h, "true") {
+		req.NoExec = true
+	}
+	if req.NoExec {
+		req.Stream = false
 	}
 
 	sessionID := c.GetHeader("X-Session-ID")

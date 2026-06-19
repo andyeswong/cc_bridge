@@ -101,6 +101,20 @@ func (p *Provider) Chat(
 
 	openAIUsage := convertUsage(usage)
 
+	// Plan-only: surface the intended tool call as OpenAI tool_calls instead of
+	// returning Claude's text (it didn't execute anything).
+	if req.NoExec {
+		calls, content := parseNoExec(text)
+		resp := domain.NewChatResponse(displayModel, content, openAIUsage)
+		if len(calls) > 0 {
+			toolCalls := "tool_calls"
+			resp.Choices[0].Message.Content = ""
+			resp.Choices[0].Message.ToolCalls = calls
+			resp.Choices[0].FinishReason = &toolCalls
+		}
+		return &resp, openAIUsage, nil
+	}
+
 	resp := domain.NewChatResponse(
 		displayModel,
 		text,
@@ -127,6 +141,7 @@ func (p *Provider) prepareCLIInput(
 		Stream:       stream,
 		Workdir:      req.Workdir,
 		AllowedTools: req.AllowedTools,
+		NoExec:       req.NoExec,
 	}
 
 	mcpPath, cleanupMCP, err := p.prepareMCPConfig(req)
@@ -136,6 +151,14 @@ func (p *Provider) prepareCLIInput(
 
 	cleanup = cleanupMCP
 	input.MCPConfigPath = mcpPath
+
+	// Plan-only is a stateless one-shot: prepend the instruction and never resume
+	// a session (the instruction must lead the prompt).
+	if req.NoExec {
+		msgs := append([]domain.Message{{Role: "system", Content: noExecInstruction(toolNames(req.Tools))}}, req.Messages...)
+		input.Prompt = formatMessages(msgs)
+		return input, cleanup, nil
+	}
 
 	if clientSessionID == "" {
 		input.Prompt = formatMessages(req.Messages)

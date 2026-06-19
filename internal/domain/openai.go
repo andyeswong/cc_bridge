@@ -112,6 +112,11 @@ type ChatRequest struct {
 	MCPServers   []string        `json:"mcp_servers,omitempty"`
 	MCPConfig    json.RawMessage `json:"mcp_config,omitempty"`
 	Workdir      string          `json:"workdir,omitempty"`
+
+	// NoExec (body "no_exec" or header X-CC-No-Exec): plan-only mode. The claude
+	// driver does NOT execute tools — tools are blocked at the CLI level and the
+	// intended tool call is returned as OpenAI tool_calls for the PARENT harness.
+	NoExec bool `json:"no_exec,omitempty"`
 }
 
 type DeltaToolCall struct {

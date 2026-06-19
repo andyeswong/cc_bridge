@@ -16,6 +16,7 @@ type cliArgs struct {
 	MCPConfigPath string
 	AllowedTools  []string
 	Workdir       string
+	NoExec        bool // plan-only: block tool execution at the CLI level
 }
 
 func binaryPath(cfg config.Config) string {
@@ -59,6 +60,12 @@ func buildArgs(cfg config.Config, input cliArgs) []string {
 
 	if len(input.AllowedTools) > 0 {
 		args = append(args, "--allowedTools", strings.Join(input.AllowedTools, ","))
+	}
+
+	if input.NoExec {
+		// Hard block: Claude physically cannot run these, so even a non-compliant
+		// response cannot cause side effects.
+		args = append(args, "--disallowedTools", strings.Join(execTools, ","))
 	}
 
 	return args
