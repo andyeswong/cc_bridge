@@ -152,10 +152,11 @@ func (p *Provider) prepareCLIInput(
 	cleanup = cleanupMCP
 	input.MCPConfigPath = mcpPath
 
-	// Plan-only is a stateless one-shot: prepend the instruction and never resume
-	// a session (the instruction must lead the prompt).
+	// Plan-only is a stateless one-shot. APPEND the directive LAST (recency) so it
+	// wins over a heavy agent persona in the leading system prompt; never resume.
 	if req.NoExec {
-		msgs := append([]domain.Message{{Role: "system", Content: noExecInstruction(toolNames(req.Tools))}}, req.Messages...)
+		msgs := append(append([]domain.Message{}, req.Messages...),
+			domain.Message{Role: "user", Content: noExecInstruction(toolNames(req.Tools))})
 		input.Prompt = formatMessages(msgs)
 		return input, cleanup, nil
 	}

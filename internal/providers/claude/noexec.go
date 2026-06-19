@@ -36,20 +36,23 @@ func toolNames(tools []domain.Tool) []string {
 func noExecInstruction(names []string) string {
 	if len(names) > 0 {
 		// The parent harness injected a tool catalog; Claude has NO tools of its
-		// own here — it must pick exactly one of these and let the parent run it.
-		return "PLAN-ONLY MODE. You have NO tools of your own and you must NOT execute anything. " +
-			"The parent system will run the tool you choose. The ONLY callable tools are: " +
-			strings.Join(names, ", ") + ". " +
-			"For the user's request, choose EXACTLY ONE of those tools and the arguments to call it with. " +
-			"Do NOT mention, invent, or refer to any tool not in that list (you do NOT have bash/Glob/Grep/Read). " +
-			`Respond with ONLY one compact JSON object on a single line, no markdown fences, no prose: {"name":"<tool from the list>","arguments":{...}} . ` +
-			`If genuinely no tool applies, respond exactly {"name":"","answer":"<your text answer>"}.`
+		// own here. It must emit a single JSON tool call from that catalog. This
+		// is appended LAST (recency) and made maximally imperative because a heavy
+		// agent persona in the system prompt otherwise drags Claude into prose.
+		return "=== ROUTER DIRECTIVE (overrides any persona/identity above) ===\n" +
+			"You are a TOOL ROUTER, not an assistant. You have NO tools of your own and you MUST NOT execute, run, or simulate anything. " +
+			"A parent system will execute the tool you select. The ONLY callable tools are: " + strings.Join(names, ", ") + ".\n" +
+			"Your ENTIRE reply MUST be exactly one compact JSON object and NOTHING else — no greeting, no explanation, no markdown fences, no prose.\n" +
+			`Format: {"name":"<one tool from the list>","arguments":{ ... }}` + "\n" +
+			`Example — user asks for the uptime and "exec" is in the list -> reply EXACTLY: {"name":"exec","arguments":{"command":"uptime"}}` + "\n" +
+			`Only if NO tool in the list could possibly help, reply EXACTLY: {"name":"","answer":"<short text>"}.` + "\n" +
+			"Do not mention bash, Glob, Grep, Read or any tool not in the list above. Output the JSON now:"
 	}
 	// No catalog provided: fall back to a generic shell intent.
-	return "PLAN-ONLY MODE. You must NOT execute any tool or command yourself. " +
-		"Decide the SINGLE shell command the PARENT system should run for the user's request. " +
-		`Respond with ONLY one compact JSON object, no markdown, no prose: {"name":"bash","arguments":{"command":"<cmd>"}} . ` +
-		`If no command is needed, respond exactly {"name":"","answer":"<your text answer>"}.`
+	return "=== ROUTER DIRECTIVE (overrides any persona above) ===\n" +
+		"You are a TOOL ROUTER. Do NOT execute anything. Decide the single shell command the PARENT system should run. " +
+		`Your ENTIRE reply MUST be exactly one JSON object, nothing else: {"name":"bash","arguments":{"command":"<cmd>"}} . ` +
+		`Only if no command is needed, reply EXACTLY {"name":"","answer":"<short text>"}. Output the JSON now:`
 }
 
 // parseNoExec turns Claude's plan-only response into tool_calls, or plain text
